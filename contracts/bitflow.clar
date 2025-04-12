@@ -209,3 +209,87 @@
     (ok true)
   )
 )
+
+;; Public Functions: Dispute Resolution
+
+;; Initiates unilateral channel closure when cooperation isn't possible
+;; This starts a dispute period during which the counterparty can challenge
+(define-public (initiate-unilateral-close 
+  (channel-id (buff 32)) 
+  (participant-b principal)
+  (proposed-balance-a uint)
+  (proposed-balance-b uint)
+  (signature (buff 65))
+)
+  (let 
+    ((channel (unwrap! (map-get? payment-channels {
+        channel-id: channel-id, 
+        participant-a: tx-sender, 
+        participant-b: participant-b
+      }) ERR-CHANNEL-NOT-FOUND))
+    (total-channel-funds (get total-deposited channel))
+    (message (concat 
+      (concat channel-id (uint-to-buff proposed-balance-a))
+      (uint-to-buff proposed-balance-b))))
+
+    (asserts! (get is-open channel) ERR-CHANNEL-CLOSED)
+    (asserts! (verify-signature message signature tx-sender) ERR-INVALID-SIGNATURE)
+    (asserts! (is-eq total-channel-funds (+ proposed-balance-a proposed-balance-b)) 
+              ERR-INSUFFICIENT-FUNDS)
+
+    (map-set payment-channels 
+      { channel-id: channel-id, participant-a: tx-sender, participant-b: participant-b }
+      (merge channel {
+        dispute-deadline: (+ stacks-block-height u144), ;; ~24 hour challenge period
+        balance-a: proposed-balance-a,
+        balance-b: proposed-balance-b
+      })
+    )
+    (ok true)
+  )
+)
+
+;; Finalizes a unilateral closure after the dispute period has passed
+;; Distributes funds according to the last valid state
+(define-public (resolve-unilateral-close 
+  (channel-id (buff 32)) 
+  (participant-b principal)
+)
+  (let 
+    ((channel (unwrap! 
+      (map-get? payment-channels {
+        channel-id: channel-id, 
+        participant-a: tx-sender, 
+        participant-b: participant-b
+      }) 
+      ERR-CHANNEL-NOT-FOUND
+    ))
+    (proposed-balance-a (get balance-a channel))
+    (proposed-balance-b (get balance-b channel)))
+
+    (asserts! (is-valid-channel-id channel-id) ERR-INVALID-INPUT)
+    (asserts! (not (is-eq tx-sender participant-b)) ERR-INVALID-INPUT)
+    (asserts! 
+      (>= stacks-block-height (get dispute-deadline channel)) 
+      ERR-DISPUTE-PERIOD
+    )
+
+    (try! (as-contract (stx-transfer? proposed-balance-a tx-sender tx-sender)))
+    (try! (as-contract (stx-transfer? proposed-balance-b tx-sender participant-b)))
+
+    (map-set payment-channels 
+      {
+        channel-id: channel-id, 
+        participant-a: tx-sender, 
+        participant-b: participant-b
+      }
+      (merge channel {
+        is-open: false,
+        balance-a: u0,
+        balance-b: u0,
+        total-deposited: u0
+      })
+    )
+    (ok true)
+  )
+)
