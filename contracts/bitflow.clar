@@ -41,6 +41,22 @@
 
 ;; Private Functions
 
+;; Include nonce in the message being signed
+(define-private (create-message 
+  (channel-id (buff 32))
+  (balance-a uint)
+  (balance-b uint)
+  (nonce uint)
+)
+  (concat 
+    (concat 
+      (concat channel-id (uint-to-buff balance-a))
+      (uint-to-buff balance-b)
+    )
+    (uint-to-buff nonce)
+  )
+)
+
 ;; Validates that a channel ID is correctly formatted
 (define-private (is-valid-channel-id (channel-id (buff 32)))
   (is-eq (len channel-id) u32)
@@ -59,6 +75,10 @@
 ;; Converts uint to buffer representation
 (define-private (uint-to-buff (n uint))
   (unwrap-panic (to-consensus-buff? n))
+)
+
+(define-private (is-valid-principal (principal-value principal))
+  (not (is-eq principal-value tx-sender))
 )
 
 ;; Verifies signature authenticity
@@ -172,7 +192,10 @@
       )
       (uint-to-buff balance-b)
     )))
-    
+    (asserts! (>= balance-a u0) ERR-INVALID-INPUT)
+	(asserts! (>= balance-b u0) ERR-INVALID-INPUT)
+	(asserts! (is-eq (+ balance-a balance-b) (get total-deposited channel)) ERR-INVALID-INPUT)
+	(asserts! (is-valid-principal participant-b) ERR-INVALID-INPUT)
     (asserts! (is-valid-channel-id channel-id) ERR-INVALID-INPUT)
     (asserts! (is-valid-signature signature-a) ERR-INVALID-INPUT)
     (asserts! (is-valid-signature signature-b) ERR-INVALID-INPUT)
@@ -189,6 +212,7 @@
       (is-eq total-channel-funds (+ balance-a balance-b)) 
       ERR-INSUFFICIENT-FUNDS
     )
+	
 
     (try! (as-contract (stx-transfer? balance-a tx-sender tx-sender)))
     (try! (as-contract (stx-transfer? balance-b tx-sender participant-b)))
@@ -236,6 +260,7 @@
     (asserts! (verify-signature message signature tx-sender) ERR-INVALID-SIGNATURE)
     (asserts! (is-eq total-channel-funds (+ proposed-balance-a proposed-balance-b)) 
               ERR-INSUFFICIENT-FUNDS)
+	(asserts! (is-valid-principal participant-b) ERR-INVALID-INPUT)
 
     (map-set payment-channels 
       { channel-id: channel-id, participant-a: tx-sender, participant-b: participant-b }
